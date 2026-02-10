@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Game of 15</title>
+    <style>
+        :root {
+            --bg: #0f172a; --panel-bg: #1e293b; --text: #f1f5f9; --accent: #38bdf8;
+            --num-default: #10b981; --num-player: #3b82f6; --num-bot: #ef4444; --warning: #f59e0b;
+        }
+        body { font-family: 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; margin: 0; padding: 20px; box-sizing: border-box;}
+        
+        /* Description */
+        .desc-box { max-width: 600px; text-align: center; margin-bottom: 20px; background: rgba(30, 41, 59, 0.5); padding: 15px; border-radius: 8px; border: 1px solid #334155; }
+        .desc-box p { margin: 5px 0; color: #cbd5e1; font-size: 0.95rem; }
+        .highlight { color: var(--accent); font-weight: bold; }
+
+        /* Layout */
+        .header { text-align: center; margin-bottom: 10px; width: 100%; display: flex; flex-direction: column; align-items: center;}
+        
+        /* Responsive Game Container */
+        .game-container { 
+            display: flex; 
+            justify-content: center; 
+            align-items: center; 
+            gap: 20px; 
+            width: 100%; 
+            max-width: 1000px; 
+            flex-wrap: wrap; /* Allows stacking on mobile */
+        }
+        
+        .zone { 
+            background: var(--panel-bg); border-radius: 12px; padding: 20px; width: 260px; height: 360px; 
+            display: flex; flex-direction: column; align-items: center; border: 1px solid #334155; 
+            position: relative; box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.3); 
+        }
+        
+        .grid-3x3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; width: 100%; }
+        .stack-container { display: flex; flex-wrap: wrap; align-content: flex-start; gap: 10px; width: 100%; height: 100%; }
+        
+        /* Blocks */
+        .block { width: 65px; height: 65px; background: var(--num-default); color: white; font-size: 1.75rem; font-weight: 700; display: flex; align-items: center; justify-content: center; border-radius: 8px; cursor: pointer; user-select: none; transition: transform 0.1s; box-shadow: 0 4px 0 rgba(0,0,0,0.2); }
+        .block:active { transform: translateY(2px); box-shadow: 0 2px 0 rgba(0,0,0,0.2); }
+        .block.player { background: var(--num-player); cursor: default; }
+        .block.bot { background: var(--num-bot); cursor: default; }
+        .block.winner { border: 3px solid #fde047; box-shadow: 0 0 15px #fde047; z-index: 10; }
+        .block:disabled { opacity: 0.6; cursor: default; }
+
+        /* Controls */
+        .controls { display: flex; gap: 10px; justify-content: center; margin-top: 15px; flex-wrap: wrap; }
+        select, button { padding: 8px 12px; background: var(--panel-bg); color: var(--text); border: 1px solid #475569; border-radius: 6px; cursor: pointer; font-size: 0.9rem; }
+        button.reset { background: var(--accent); color: #0f172a; font-weight: bold; border: none; }
+        button.reset:hover { opacity: 0.9; }
+
+        #btn-analysis {
+            background: #334155; color: #94a3b8; border: 1px solid #475569; cursor: not-allowed; transition: all 0.3s;
+        }
+        #btn-analysis.active {
+            background: var(--warning); color: #0f172a; font-weight: bold; cursor: pointer; box-shadow: 0 0 10px rgba(245, 158, 11, 0.4); border: none;
+        }
+
+        #status-msg { height: 1.5rem; margin-top: 15px; font-weight: bold; color: #94a3b8; font-size: 1.1rem; }
+
+        /* MOBILE OPTIMIZATIONS */
+        @media (max-width: 850px) {
+            .game-container { flex-direction: column; }
+            .zone { width: 90%; max-width: 300px; height: auto; min-height: 200px; padding: 15px; }
+            .grid-3x3 { width: 100%; max-width: 250px; }
+            body { justify-content: flex-start; } /* Allow scrolling from top */
+        }
+    </style>
+</head>
+<body>
+
+    <div class="header">
+        <h1 style="color:var(--accent); margin:0 0 10px 0;">Game of 15</h1>
+        
+        <div class="desc-box">
+            <p><strong>Goal:</strong> Pick 3 numbers that sum exactly to <span class="highlight">15</span>.</p>
+            <p>You and the Bot take turns picking one number at a time.</p>
+            <p style="font-style: italic; color: #94a3b8;">(Tip: You must use exactly 3 numbers for the sum!)</p>
+        </div>
+
+        <div class="controls">
+            <select id="difficulty"><option value="thinking">Mode: Impossible</option><option value="random">Mode: Easy</option></select>
+            <select id="turnOrder"><option value="first">Play First</option><option value="second">Play Second</option></select>
+            <button class="reset" onclick="initGame()">New Game</button>
+            <button id="btn-analysis" onclick="goToAnalysis()" disabled>Analysis (Play 5 Games)</button>
+        </div>
+        <div id="status-msg">Your Turn</div>
+    </div>
+
+    <div class="game-container">
+        <div class="zone">
+            <h2 style="color: var(--num-player); margin-top:0;">Player</h2>
+            <div class="stack-container" id="player-stack"></div>
+        </div>
+
+        <div class="zone">
+            <h2 style="margin-top:0;">Available</h2>
+            <div class="grid-3x3" id="board-grid"></div>
+        </div>
+
+        <div class="zone">
+            <h2 style="color: var(--num-bot); margin-top:0;">Bot</h2>
+            <div class="stack-container" id="bot-stack"></div>
+        </div>
+    </div>
+
+<script>
+    // Magic Square Mapping (The Core Logic)
+    const MAGIC_MAP = { 2:0, 7:1, 6:2, 9:3, 5:4, 1:5, 4:6, 3:7, 8:8 };
+    const REVERSE_MAP = [2, 7, 6, 9, 5, 1, 4, 3, 8];
+    const NUMBERS = [1, 2, 3, 4, 5, 6, 7, 8, 9];
+    const WIN_LINES = [[0,1,2], [3,4,5], [6,7,8], [0,3,6], [1,4,7], [2,5,8], [0,4,8], [2,4,6]];
+
+    // State Variables
+    let available = [], playerMoves = [], botMoves = [];
+    let gameOver = false;
+    let gamesPlayed = 0;
+    let currentMoveLog = [];
+    let gameHistory = [];
+
+    // Elements
+    const boardGrid = document.getElementById('board-grid');
+    const playerStack = document.getElementById('player-stack');
+    const botStack = document.getElementById('bot-stack');
+    const statusMsg = document.getElementById('status-msg');
+    const btnAnalysis = document.getElementById('btn-analysis');
+    const modeSelect = document.getElementById('difficulty');
+    const turnSelect = document.getElementById('turnOrder');
+
+    // Load History
+    if(sessionStorage.getItem('gameHistory')) {
+        gameHistory = JSON.parse(sessionStorage.getItem('gameHistory'));
+        gamesPlayed = gameHistory.length;
+        checkAnalysisUnlock();
+    }
+
+    function initGame() {
+        available = [...NUMBERS];
+        playerMoves = []; botMoves = []; currentMoveLog = [];
+        gameOver = false;
+        
+        statusMsg.textContent = "Your Turn";
+        statusMsg.style.color = "#94a3b8";
+        boardGrid.innerHTML = ''; playerStack.innerHTML = ''; botStack.innerHTML = '';
+
+        NUMBERS.forEach(num => {
+            const btn = document.createElement('div');
+            btn.className = 'block';
+            btn.textContent = num;
+            btn.id = `block-${num}`;
+            btn.onclick = () => playerTurn(num);
+            boardGrid.appendChild(btn);
+        });
+
+        if (turnSelect.value === 'second') {
+            statusMsg.textContent = "Bot Thinking...";
+            toggleBoard(false);
+            setTimeout(() => { botTurn(); if (!gameOver) toggleBoard(true); }, 600);
+        }
+    }
+
+    function playerTurn(num) {
+        if (gameOver || !available.includes(num)) return;
+        
+        recordMove('P', num);
+        moveBlock(num, playerStack, 'player');
+        playerMoves.push(num);
+        available = available.filter(n => n !== num);
+
+        if (checkWin(playerMoves)) { endGame("Player Wins!", "var(--num-player)", playerMoves, 'Player'); return; }
+        if (available.length === 0) { endGame("It's a Draw!", "white", null, 'Draw'); return; }
+
+        statusMsg.textContent = "Bot Thinking...";
+        toggleBoard(false);
+        setTimeout(() => { botTurn(); if (!gameOver) toggleBoard(true); }, 500);
+    }
+
+    function botTurn() {
+        if (gameOver) return;
+        let move = (modeSelect.value === 'random') ? available[Math.floor(Math.random() * available.length)] : getBestMoveMinimax();
+        
+        recordMove('B', move);
+        moveBlock(move, botStack, 'bot');
+        botMoves.push(move);
+        available = available.filter(n => n !== move);
+
+        if (checkWin(botMoves)) { endGame("Bot Wins!", "var(--num-bot)", botMoves, 'Bot'); return; }
+        if (available.length === 0) { endGame("It's a Draw!", "white", null, 'Draw'); return; }
+        statusMsg.textContent = "Your Turn";
+    }
+
+    function recordMove(who, num) { currentMoveLog.push({ who: who, num: num }); }
+
+    function endGame(msg, color, winners, resultStr) {
+        gameOver = true;
+        statusMsg.textContent = msg;
+        statusMsg.style.color = color;
+        toggleBoard(false);
+        if (winners) highlightWinners(winners);
+
+        gamesPlayed++;
+        gameHistory.push({ id: gamesPlayed, winner: resultStr, moves: currentMoveLog, mode: modeSelect.value });
+        sessionStorage.setItem('gameHistory', JSON.stringify(gameHistory));
+        checkAnalysisUnlock();
+    }
+
+    function checkAnalysisUnlock() {
+        // CHANGED TO 5 GAMES AS REQUESTED
+        if (gamesPlayed >= 5) {
+            btnAnalysis.disabled = false;
+            btnAnalysis.classList.add('active');
+            btnAnalysis.textContent = `Analysis (${gamesPlayed} Games Ready)`;
+        } else {
+            btnAnalysis.textContent = `Analysis (Play ${5 - gamesPlayed} more)`;
+        }
+    }
+
+    function goToAnalysis() { window.location.href = 'analysis.html'; }
+
+    // --- Minimax Logic ---
+    function getBestMoveMinimax() {
+        let board = Array(9).fill(null);
+        playerMoves.forEach(num => board[MAGIC_MAP[num]] = 'P');
+        botMoves.forEach(num => board[MAGIC_MAP[num]] = 'B');
+        let bestScore = -Infinity, moveIndex = -1;
+        for (let i = 0; i < 9; i++) {
+            if (board[i] === null) {
+                board[i] = 'B';
+                let score = minimax(board, 0, false);
+                board[i] = null;
+                if (score > bestScore) { bestScore = score; moveIndex = i; }
+            }
+        }
+        return REVERSE_MAP[moveIndex];
+    }
+
+    function minimax(board, depth, isMaximizing) {
+        if (checkWinGrid(board, 'B')) return 10 - depth;
+        if (checkWinGrid(board, 'P')) return depth - 10;
+        if (!board.includes(null)) return 0;
+        if (isMaximizing) {
+            let bestScore = -Infinity;
+            for (let i = 0; i < 9; i++) {
+                if (board[i] === null) { board[i] = 'B'; bestScore = Math.max(bestScore, minimax(board, depth + 1, false)); board[i] = null; }
+            }
+            return bestScore;
+        } else {
+            let bestScore = Infinity;
+            for (let i = 0; i < 9; i++) {
+                if (board[i] === null) { board[i] = 'P'; bestScore = Math.min(bestScore, minimax(board, depth + 1, true)); board[i] = null; }
+            }
+            return bestScore;
+        }
+    }
+    
+    function checkWinGrid(board, sym) { return WIN_LINES.some(l => board[l[0]] == sym && board[l[1]] == sym && board[l[2]] == sym); }
+    function checkWin(moves) { if (moves.length < 3) return false; for (let i=0; i<moves.length; i++) for (let j=i+1; j<moves.length; j++) for (let k=j+1; k<moves.length; k++) if (moves[i]+moves[j]+moves[k] === 15) return true; return false; }
+    function moveBlock(num, target, cls) { const b = document.getElementById(`block-${num}`); const f = b.getBoundingClientRect(); target.appendChild(b); b.classList.add(cls); const l = b.getBoundingClientRect(); const dx = f.left - l.left, dy = f.top - l.top; b.style.transition = 'none'; b.style.transform = `translate(${dx}px, ${dy}px)`; void b.offsetWidth; b.style.transition = 'transform 0.4s cubic-bezier(0.25, 1, 0.5, 1)'; b.style.transform = 'translate(0, 0)'; }
+    function toggleBoard(active) { document.querySelectorAll('.block:not(.player):not(.bot)').forEach(b => { b.style.pointerEvents = active ? 'auto' : 'none'; b.style.opacity = active ? '1' : '0.6'; }); }
+    function highlightWinners(winners) { for (let i=0; i<winners.length; i++) for (let j=i+1; j<winners.length; j++) for (let k=j+1; k<winners.length; k++) if (winners[i]+winners[j]+winners[k]===15) [winners[i], winners[j], winners[k]].forEach(n => document.getElementById(`block-${n}`).classList.add('winner')); }
+
+    initGame();
+</script>
+</body>
+</html>
