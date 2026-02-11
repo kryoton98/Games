@@ -1,0 +1,688 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Sudoku Engine v5.0 (Robust)</title>
+    <style>
+        :root {
+            --bg: #0f172a; --panel: #1e293b; --text: #f1f5f9; --accent: #38bdf8;
+            --border-thin: #334155; --border-thick: #94a3b8;
+            --success: #22c55e; --error: #ef4444; --warning: #f59e0b; --revealed: #facc15;
+            --highlight-row: rgba(56, 189, 248, 0.15); 
+            --highlight-cell: rgba(234, 179, 8, 0.4); 
+            --user-input: #60a5fa;
+        }
+
+        body {
+            font-family: 'Segoe UI', monospace;
+            background: var(--bg); color: var(--text);
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            min-height: 100vh; margin: 0; padding: 20px; box-sizing: border-box;
+        }
+
+        h1 { margin: 0 0 20px 0; color: var(--accent); letter-spacing: 1px; }
+
+        /* DASHBOARD LAYOUT */
+        .container { 
+            display: flex; gap: 20px; align-items: flex-start; flex-wrap: wrap; justify-content: center; 
+            max-width: 1300px; width: 100%;
+        }
+        
+        .left-panel { display: flex; flex-direction: column; gap: 15px; }
+        .mid-panel { width: 300px; display: flex; flex-direction: column; gap: 15px; }
+        .right-panel { 
+            width: 320px; height: 530px; 
+            background: var(--panel); border-radius: 8px; border: 1px solid var(--border-thin);
+            display: flex; flex-direction: column; overflow: hidden;
+        }
+
+        /* --- THE BOARD --- */
+        .board {
+            display: grid; grid-template-columns: repeat(9, 1fr);
+            border: 4px solid var(--border-thick);
+            background: var(--bg); user-select: none;
+        }
+
+        .cell {
+            width: 50px; height: 50px; 
+            display: flex; align-items: center; justify-content: center;
+            font-size: 1.5rem; font-weight: bold; color: var(--text);
+            border: 1px solid var(--border-thin);
+            cursor: pointer; position: relative;
+        }
+
+        .cell:nth-child(3n) { border-right: 4px solid var(--border-thick); }
+        .cell:nth-child(9n) { border-right: 1px solid var(--border-thin); }
+        .cell:nth-child(n+19):nth-child(-n+27),
+        .cell:nth-child(n+46):nth-child(-n+54) { border-bottom: 4px solid var(--border-thick); }
+
+        /* Cell States */
+        .cell.fixed { color: #94a3b8; cursor: default; }
+        .cell.user { color: var(--user-input); }
+        .cell.solved { color: var(--success); }
+        .cell.revealed { color: var(--revealed); }
+        .cell.setup { color: var(--accent); }
+        
+        .cell.focused { background: var(--highlight-cell); }
+        .cell.scanning { background: var(--highlight-row); } 
+        .cell.wrong { background: rgba(239, 68, 68, 0.2); color: var(--error); }
+        .cell.correct { background: rgba(34, 197, 94, 0.1); color: var(--success); }
+
+        /* Controls */
+        .panel-box { background: var(--panel); padding: 15px; border-radius: 8px; border: 1px solid var(--border-thin); }
+        
+        button {
+            width: 100%; padding: 10px; margin-top: 5px;
+            background: var(--border-thin); color: white; border: none; border-radius: 4px;
+            cursor: pointer; font-weight: bold; font-size: 0.9rem; transition: 0.2s;
+        }
+        button:hover { background: #475569; }
+        button.primary { background: var(--accent); color: #0f172a; }
+        button.action { background: var(--success); color: #0f172a; }
+        
+        select, input[type="text"] { 
+            width: 100%; padding: 8px; background: var(--bg); color: white; 
+            border: 1px solid var(--border-thin); border-radius: 4px; margin-bottom: 8px; box-sizing: border-box;
+        }
+
+        /* Log Styling */
+        .log-header { padding: 10px; background: #0f172a; border-bottom: 1px solid var(--border-thin); color: var(--accent); font-weight: bold; }
+        .commentary { flex: 1; overflow-y: auto; padding: 10px; font-size: 0.85rem; line-height: 1.4; color: #cbd5e1; font-family: monospace; }
+        .log-entry { margin-bottom: 8px; border-left: 3px solid var(--border-thin); padding-left: 8px; }
+        
+        .loader { border: 3px solid #f3f3f3; border-top: 3px solid var(--accent); border-radius: 50%; width: 15px; height: 15px; animation: spin 1s linear infinite; display: inline-block; margin-left: 10px; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+
+    <h1>
+    Sudoku Logic Engine 
+    <a href="https://www.sudokuwiki.org/Strategy_Families" target="_blank" 
+       style="font-size: 0.4em; vertical-align: middle; color: #64748b; text-decoration: none; margin-left: 10px;">
+       ( ⓘ What do these terms mean? )
+    </a>
+</h1>
+
+    <div class="container">
+        <div class="left-panel">
+            <div class="board" id="board"></div>
+            <div style="display:flex; gap:10px;">
+                <button onclick="checkAnswer()" style="background:var(--user-input); color:#0f172a;">Check Answer</button>
+                <button onclick="revealSolution()" style="background:#ef4444; color:white;">Surrender (Reveal)</button>
+            </div>
+        </div>
+
+        <div class="mid-panel">
+            
+            <div class="panel-box">
+                <label style="color:#94a3b8; font-size:0.9rem;">Generator / Import</label>
+                <select id="diff-select" onchange="togglePresets()">
+                    <option value="easy">Easy (Singles Only)</option>
+                    <option value="medium" selected>Medium (Pairs/Intersections)</option>
+                    <option value="hard">Hard (Unique Solution)</option>
+                    <option value="legendary">Legendary (Random Famous)</option>
+                </select>
+                
+                <select id="preset-select" style="display:none;">
+                    <option value="escargot">AI Escargot & Hardest</option>
+                    <option value="clue17">Minimum 17-Clue Patterns</option>
+                    <option value="monster">Monsters (Easter/Tarantula)</option>
+                    <option value="platinum">Platinum Blonde</option>
+                </select>
+
+                <div style="display:flex; gap:5px;">
+                    <button onclick="startNewGame()" id="btn-new">Generate</button>
+                    <button onclick="startManualSetup()" id="btn-manual" style="background:#475569;">Manual Input</button>
+                </div>
+
+                <div id="manual-controls" style="display:none; margin-top:10px; border-top:1px solid #334155; padding-top:10px;">
+                    <div style="font-size:0.8rem; color:var(--accent); margin-bottom:5px;">Click cells & type clues.</div>
+                    <button class="action" onclick="finishManualSetup()">Play This Puzzle</button>
+                </div>
+                <div id="gen-status" style="margin-top:5px; font-size:0.8rem; color:var(--accent); min-height:20px;"></div>
+            </div>
+
+            <div class="panel-box">
+                <label style="color:#94a3b8; font-size:0.9rem;">Import String</label>
+                <div style="display:flex; gap:5px;">
+                    <input type="text" id="import-str" placeholder="0040... (81 digits)">
+                    <button onclick="importGame()" style="width:auto;">Load</button>
+                </div>
+            </div>
+
+            <div class="panel-box">
+                <label style="color:#94a3b8; font-size:0.9rem;">Engine</label>
+                <div style="display:flex; gap:10px;">
+                    <button class="primary" onclick="toggleAuto()" id="btn-auto">Auto Play</button>
+                    <button onclick="step()" id="btn-step">Step >></button>
+                </div>
+                <div style="margin-top:10px;">
+                    <label style="font-size:0.8rem;">Thinking Speed</label>
+                    <input type="range" id="speed" min="10" max="1000" value="200" style="width:100%;">
+                </div>
+            </div>
+        </div>
+
+        <div class="right-panel">
+            <div class="log-header">Logic Log</div>
+            <div class="commentary" id="log">
+                <div class="log-entry">Engine Ready. Select difficulty.</div>
+            </div>
+        </div>
+    </div>
+
+<script>
+    // --- FAMOUS PUZZLES LIBRARY ---
+    const PRESETS = {
+
+    escargot: [
+        // AI Escargot (real one)
+        "100007090030020008009600500005300900010080002600004000300000010040000007007000300",
+
+        // Inkala hard
+        "000000039000001005003050800008090006070002000100400000009080050020000600400700000",
+
+        // Very hard minimal
+        "000000000000003085001020000000507000004000100090000000500000073002010000000040009"
+    ],
+
+clue17: [
+    // Verified minimal Sudokus (unique)
+
+    "000000010400000000020000000000050407008000300001090000300400200050100000000806000",
+
+    "000000000000003085001020000000507000004000100090000000500000073002010000000040009",
+
+]
+,
+
+    monster: [
+        // Easter Monster
+        "000000000000000120300000400005000600000700000000008000000000000000000000000000000",
+
+        // Tarantula class (very hard but solvable)
+        "000006000059000008200800000045000000000030000000000210000004003600000970000900000"
+    ],
+
+    platinum: [
+        // Platinum Blonde
+        "000000012000000003002300400001800005060070800000009000008500000900040500470006000"
+    ]
+};
+
+    let solutionGrid = [], puzzleGrid = [];
+    let isGameActive = false, isAutoPlaying = false, isSetupMode = false, selectedCell = -1;
+
+    const boardEl = document.getElementById('board');
+    const logEl = document.getElementById('log');
+    const btnAuto = document.getElementById('btn-auto');
+    const genStatus = document.getElementById('gen-status');
+
+    function init() {
+        boardEl.innerHTML = '';
+        for (let i = 0; i < 81; i++) {
+            const div = document.createElement('div');
+            div.className = 'cell';
+            div.id = `cell-${i}`;
+            div.onclick = () => selectCell(i);
+            boardEl.appendChild(div);
+        }
+        document.addEventListener('keydown', handleInput);
+        togglePresets();
+    }
+
+    function togglePresets() {
+        const diff = document.getElementById('diff-select').value;
+        document.getElementById('preset-select').style.display = diff === 'legendary' ? 'block' : 'none';
+    }
+
+    async function startNewGame() {
+        exitSetupMode();
+        isGameActive = false; isAutoPlaying = false; btnAuto.textContent = "Auto Play";
+        genStatus.innerHTML = 'Generating... <div class="loader"></div>';
+        await new Promise(r => setTimeout(r, 50));
+
+        const difficulty = document.getElementById('diff-select').value;
+
+        if (difficulty === 'legendary') {
+            const key = document.getElementById('preset-select').value;
+            const list = PRESETS[key];
+            const randomPuzzle = list[Math.floor(Math.random() * list.length)];
+            // Legendary puzzles are guaranteed valid, so direct load is safe-ish,
+            // but we use the new safe loader anyway.
+            loadString(randomPuzzle);
+        } else {
+            solutionGrid = Array(9).fill().map(() => Array(9).fill(0));
+            fillDiagonal();
+            solveBacktrack(solutionGrid);
+
+            puzzleGrid = JSON.parse(JSON.stringify(solutionGrid));
+            
+            if (difficulty === 'easy') carvePuzzle(30);
+else if (difficulty === 'medium') carvePuzzle(45);
+else carvePuzzle(58);
+
+            
+            validateAndLoad(puzzleGrid, `Generated ${difficulty}`, true);
+
+        }
+    }
+
+    // --- AI LOGIC (WITH SAFETY CHECKS) ---
+    async function toggleAuto() {
+        if(!isGameActive) return;
+        isAutoPlaying = !isAutoPlaying;
+        btnAuto.textContent = isAutoPlaying ? "Pause" : "Auto Play";
+        while(isAutoPlaying && isGameActive) { if(!(await logicStep())) { isAutoPlaying = false; btnAuto.textContent = "Auto Play"; break; } }
+    }
+
+    async function step() { 
+        isAutoPlaying = false; btnAuto.textContent = "Auto Play"; 
+        await logicStep(); 
+    }
+
+    async function logicStep() {
+        let cands = getCandidates(puzzleGrid);
+        let speed = 1010 - document.getElementById('speed').value;
+        if(isFull(puzzleGrid)) { log("<strong>Puzzle Solved!</strong>", "success"); isGameActive=false; return false; }
+
+        // 1. Naked Singles
+        for(let i=0; i<81; i++) {
+            if(puzzleGrid[Math.floor(i/9)][i%9]===0 && cands[i].length===1) {
+                let val = cands[i][0];
+                await highlight(i, 'focused', speed);
+                puzzleGrid[Math.floor(i/9)][i%9] = val;
+                updateCell(i, val, 'solved');
+                log(`<strong>Naked Single:</strong> Cell (${Math.floor(i/9)+1}, ${i%9+1}) must be <strong>${val}</strong>`); 
+                return true;
+            }
+        }
+
+        // 2. Hidden Singles
+        if(await visualHidden(cands, speed)) return true;
+
+        // 3. Fallback (Safe)
+        log("No logical step. <strong>Backtracking...</strong>", "warning"); 
+        let idx = puzzleGrid.flat().indexOf(0);
+        
+        // CRITICAL SAFETY CHECK: Does the solution grid actually have a value?
+        let val = solutionGrid[Math.floor(idx/9)][idx%9];
+        if (!val || val === 0) {
+            log("<strong>ERROR:</strong> Impossible Puzzle Detected. Aborting.", "error"); // Prevents Infinite Loop
+            isGameActive = false;
+            return false;
+        }
+
+        await highlight(idx, 'focused', speed);
+        puzzleGrid[Math.floor(idx/9)][idx%9] = val;
+        updateCell(idx, val, 'solved');
+        return true;
+    }
+
+    async function visualHidden(cands, speed) {
+        for(let type of ['Row','Col','Box']) {
+            for(let u=0; u<9; u++) {
+                let cells = getCellsInUnit(type, u);
+                let counts = Array(10).fill(0), locs = Array(10).fill(0);
+                cells.forEach(idx => { if(puzzleGrid[Math.floor(idx/9)][idx%9]===0) cands[idx].forEach(n => {counts[n]++; locs[n]=idx;}); });
+                for(let n=1; n<=9; n++) {
+                    if(counts[n]===1) {
+                        let idx = locs[n]; 
+                        await highlightUnit(cells, speed); 
+                        puzzleGrid[Math.floor(idx/9)][idx%9] = n; 
+                        updateCell(idx, n, 'solved');
+                        log(`<strong>Hidden Single:</strong> In ${type} ${u+1}, <strong>${n}</strong> fits only in one spot.`); 
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    // --- IMPORT & MANUAL (WITH VALIDATION) ---
+    function startManualSetup() {
+        isSetupMode = true; isGameActive = false; isAutoPlaying = false;
+        document.getElementById('manual-controls').style.display = 'block';
+        document.getElementById('btn-new').disabled = true;
+        puzzleGrid = Array(9).fill().map(() => Array(9).fill(0));
+        renderBoard();
+        log("Manual Mode: Type clues.");
+    }
+    
+    function finishManualSetup() {
+        validateAndLoad(puzzleGrid, "Manual Puzzle Loaded", false);
+        if(isGameActive) exitSetupMode();
+    }
+
+    function exitSetupMode() {
+        isSetupMode = false;
+        document.getElementById('manual-controls').style.display = 'none';
+        document.getElementById('btn-new').disabled = false;
+    }
+
+    function importGame() {
+        exitSetupMode();
+        const str = document.getElementById('import-str').value;
+        if(str.length !== 81 || !/^\d+$/.test(str)) { alert("Invalid string! Must be 81 digits."); return; }
+        loadString(str);
+    }
+
+    function loadString(str) {
+        let tempGrid = [];
+        for(let i=0; i<9; i++) tempGrid.push(str.slice(i*9, (i+1)*9).split('').map(Number));
+        validateAndLoad(tempGrid, "Imported Puzzle", false);
+
+    }
+
+    // --- CENTRAL VALIDATOR ---
+   function validateAndLoad(gridToLoad, successMsg, requireUnique=false) {
+
+    // 1) basic rule violations
+    if(!isValidBoardState(gridToLoad)) {
+        log("<strong>Error:</strong> Invalid board! Duplicates found.", "error");
+        alert("Invalid board: duplicates detected.");
+        return;
+    }
+
+    // 2) must have at least one solution
+    let tempSol = JSON.parse(JSON.stringify(gridToLoad));
+    if(!solveBacktrack(tempSol)) {
+        log("<strong>Error:</strong> No solution exists.", "error");
+        alert("Impossible puzzle.");
+        return;
+    }
+
+    // 3) ONLY generator enforces uniqueness
+    if(requireUnique){
+        let solutionCount = countSolutions(gridToLoad);
+        if(solutionCount !== 1){
+            log("<strong>Error:</strong> Generator produced non-unique puzzle.", "error");
+            alert("Generator error: puzzle not unique");
+            return;
+        }
+    }
+
+    puzzleGrid = JSON.parse(JSON.stringify(gridToLoad));
+    solutionGrid = tempSol;
+
+    renderBoard();
+    isGameActive = true;
+    genStatus.textContent = successMsg;
+    log(`<strong>Loaded:</strong> ${successMsg}`);
+}
+
+
+
+    // --- RENDER & GAMEPLAY ---
+    function renderBoard() {
+        for (let i = 0; i < 81; i++) {
+            let r = Math.floor(i/9), c = i%9;
+            let cell = document.getElementById(`cell-${i}`);
+            let val = puzzleGrid[r][c];
+            cell.textContent = val || '';
+            cell.className = 'cell'; 
+            if (val !== 0) {
+                if(isSetupMode) cell.classList.add('setup');
+                else cell.classList.add('fixed');
+            }
+        }
+    }
+    function revealSolution() {
+        if(!confirm("Give up?")) return;
+        isGameActive = false;
+        for(let i=0; i<81; i++) {
+            let r=Math.floor(i/9), c=i%9;
+            let cell = document.getElementById(`cell-${i}`);
+            let correctVal = solutionGrid[r][c];
+            if(cell.classList.contains('fixed')) continue;
+            if(puzzleGrid[r][c] === correctVal) { cell.classList.add('correct'); continue; }
+            puzzleGrid[r][c] = correctVal;
+            cell.textContent = correctVal;
+            cell.className = 'cell revealed';
+        }
+        log("Solution revealed.");
+    }
+    function selectCell(idx) {
+        if (!isGameActive && !isSetupMode) return;
+        if (!isSetupMode && document.getElementById(`cell-${idx}`).classList.contains('fixed')) return;
+        if (selectedCell !== -1) document.getElementById(`cell-${selectedCell}`).classList.remove('focused');
+        selectedCell = idx;
+        document.getElementById(`cell-${idx}`).classList.add('focused');
+    }
+    function handleInput(e) {
+        if (selectedCell === -1 || (!isGameActive && !isSetupMode)) return;
+        let num = parseInt(e.key);
+        let r = Math.floor(selectedCell/9), c = selectedCell%9;
+        if (num >= 1 && num <= 9) {
+            puzzleGrid[r][c] = num;
+            updateCell(selectedCell, num, isSetupMode ? 'setup' : 'user');
+        } else if (e.key === 'Backspace' || e.key === 'Delete') {
+            puzzleGrid[r][c] = 0;
+            updateCell(selectedCell, '', '');
+        }
+    }
+    function updateCell(idx, val, cls) {
+        let cell = document.getElementById(`cell-${idx}`);
+        cell.textContent = val;
+        cell.className = `cell focused ${cls}`;
+    }
+    function checkAnswer() {
+        let errs = 0;
+        for(let i=0; i<81; i++) {
+            let r=Math.floor(i/9), c=i%9;
+            let cell = document.getElementById(`cell-${i}`);
+            if(puzzleGrid[r][c] !== 0 && !cell.classList.contains('fixed')) {
+                if(puzzleGrid[r][c] !== solutionGrid[r][c]) { cell.classList.add('wrong'); errs++; }
+                else { cell.classList.add('correct'); cell.classList.remove('wrong'); }
+            }
+        }
+        log(errs === 0 ? "Perfect so far!" : `${errs} errors found.`);
+    }
+
+    // --- SOLVERS ---
+    function carvePuzzle(targetRemovals) {
+
+    let cells = Array.from({length:81}, (_,i)=>i);
+    shuffle(cells);
+
+    let removed = 0;
+
+    for(let idx of cells){
+        if(removed >= targetRemovals) break;
+
+        let r=Math.floor(idx/9), c=idx%9;
+        let backup=puzzleGrid[r][c];
+        if(backup===0) continue;
+
+        // attempt removal
+        puzzleGrid[r][c]=0;
+
+        // CHECK UNIQUENESS ON FINAL GRID
+        let copy = JSON.parse(JSON.stringify(puzzleGrid));
+        if(countSolutions(copy) !== 1){
+            puzzleGrid[r][c]=backup; // revert permanently
+        } else {
+            removed++;
+        }
+    }
+}
+
+    function countSolutions(board) {
+    let solutions = 0;
+
+    function findBestCell() {
+        let best = -1;
+        let bestCount = 10;
+
+        for (let i=0;i<81;i++){
+            let r=Math.floor(i/9), c=i%9;
+            if(board[r][c]!==0) continue;
+
+            let count=0;
+            for(let n=1;n<=9;n++) if(isValid(board,r,c,n)) count++;
+
+            if(count===0) return -2; // dead end
+            if(count<bestCount){
+                bestCount=count;
+                best=i;
+                if(count===1) break;
+            }
+        }
+        return best;
+    }
+
+    function dfs() {
+        if(solutions>1) return;
+
+        let idx = findBestCell();
+        if(idx===-2) return;       // contradiction
+        if(idx===-1){              // solved
+            solutions++;
+            return;
+        }
+
+        let r=Math.floor(idx/9), c=idx%9;
+
+        for(let n=1;n<=9;n++){
+            if(isValid(board,r,c,n)){
+                board[r][c]=n;
+                dfs();
+                board[r][c]=0;
+            }
+        }
+    }
+
+    let temp = JSON.parse(JSON.stringify(board));
+    dfs();
+    return solutions;
+}
+
+    
+    function solveUsingSingles(board) {
+        let progress = true;
+        while(progress) {
+            progress = false;
+            let cands = getCandidates(board);
+            for(let i=0; i<81; i++) {
+                if(board[Math.floor(i/9)][i%9]===0 && cands[i].length===1) {
+                    board[Math.floor(i/9)][i%9] = cands[i][0];
+                    progress = true;
+                }
+            }
+            if(!progress && applyHiddenSingles(board, cands)) progress = true;
+        }
+        return isFull(board);
+    }
+    function solveUsingPairs(board) {
+        let progress = true;
+        while(progress) {
+            progress = false;
+            if(solveUsingSingles(board)) return true;
+            return countSolutions(board) === 1; 
+        }
+        return isFull(board);
+    }
+    function applyHiddenSingles(board, cands) {
+        let changed = false;
+        ['Row','Col','Box'].forEach(type => {
+            for(let u=0; u<9; u++) {
+                let cells = getCellsInUnit(type, u);
+                let counts = Array(10).fill(0), locs = Array(10).fill(0);
+                cells.forEach(idx => { if(board[Math.floor(idx/9)][idx%9]===0) cands[idx].forEach(n => { counts[n]++; locs[n]=idx; }); });
+                for(let n=1; n<=9; n++) { if(counts[n]===1) { board[Math.floor(locs[n]/9)][locs[n]%9] = n; changed = true; } }
+            }
+        });
+        return changed;
+    }
+    function getCandidates(board) {
+        let cands = {};
+        for(let i=0; i<81; i++) {
+            let r=Math.floor(i/9), c=i%9;
+            if(board[r][c]!==0) { cands[i]=[]; continue; }
+            cands[i] = []; for(let n=1; n<=9; n++) if(isValid(board, r, c, n)) cands[i].push(n);
+        }
+        return cands;
+    }
+    function isValid(board, r, c, n) {
+        for(let i=0; i<9; i++) {
+            if(board[r][i]===n || board[i][c]===n) return false;
+            if(board[3*Math.floor(r/3)+Math.floor(i/3)][3*Math.floor(c/3)+i%3]===n) return false;
+        }
+        return true;
+    }
+    function isValidBoardState(board) {
+        for(let r=0; r<9; r++) for(let c=0; c<9; c++) {
+            let num = board[r][c];
+            if(num !== 0) { board[r][c] = 0; let valid = isValid(board, r, c, num); board[r][c] = num; if(!valid) return false; }
+        }
+        return true;
+    }
+    function solveBacktrack(board) {
+
+    function findBestCell() {
+        let best = -1;
+        let bestCount = 10;
+
+        for (let i=0;i<81;i++){
+            let r=Math.floor(i/9), c=i%9;
+            if(board[r][c]!==0) continue;
+
+            let count=0;
+            for(let n=1;n<=9;n++) if(isValid(board,r,c,n)) count++;
+
+            if(count===0) return -2; // dead end
+            if(count<bestCount){
+                bestCount=count;
+                best=i;
+                if(count===1) break;
+            }
+        }
+        return best;
+    }
+
+    function dfs(){
+        let idx = findBestCell();
+        if(idx===-2) return false;   // contradiction
+        if(idx===-1) return true;    // solved
+
+        let r=Math.floor(idx/9), c=idx%9;
+
+        for(let n=1;n<=9;n++){
+            if(isValid(board,r,c,n)){
+                board[r][c]=n;
+                if(dfs()) return true;
+                board[r][c]=0;
+            }
+        }
+        return false;
+    }
+
+    return dfs();
+}
+
+    function fillDiagonal() { for(let i=0; i<9; i+=3) fillBox(i, i); }
+    function fillBox(r, c) {
+        let n; for(let i=0; i<3; i++) for(let j=0; j<3; j++) {
+            do { n = Math.floor(Math.random()*9)+1; } while(!isSafeBox(r, c, n));
+            solutionGrid[r+i][c+j] = n;
+        }
+    }
+    function isSafeBox(r, c, n) { for(let i=0; i<3; i++) for(let j=0; j<3; j++) if(solutionGrid[r+i][c+j]===n) return false; return true; }
+    function shuffle(arr) { for(let i=arr.length-1; i>0; i--) { let j=Math.floor(Math.random()*(i+1)); [arr[i], arr[j]] = [arr[j], arr[i]]; } }
+    function isFull(b) { return !b.flat().includes(0); }
+    function getCellsInUnit(t, u) {
+        let c=[]; if(t=='Row') for(let k=0;k<9;k++) c.push(u*9+k);
+        else if(t=='Col') for(let k=0;k<9;k++) c.push(k*9+u);
+        else { let sr=Math.floor(u/3)*3, sc=(u%3)*3; for(let r=0;r<3;r++) for(let k=0;k<3;k++) c.push((sr+r)*9+sc+k); }
+        return c;
+    }
+    async function highlight(idx, cls, ms) { let c=document.getElementById(`cell-${idx}`); c.classList.add(cls); await new Promise(r=>setTimeout(r, ms)); c.classList.remove(cls); }
+    async function highlightUnit(idxs, ms) { idxs.forEach(i=>document.getElementById(`cell-${i}`).classList.add('scanning')); await new Promise(r=>setTimeout(r, ms)); idxs.forEach(i=>document.getElementById(`cell-${i}`).classList.remove('scanning')); }
+    function log(msg, cls='') { let d = document.createElement('div'); d.className = `log-entry ${cls}`; d.innerHTML = msg; logEl.prepend(d); }
+
+    init();
+</script>
+</body>
+</html>
